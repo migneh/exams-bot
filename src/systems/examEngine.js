@@ -12,11 +12,14 @@ const dao = require('../database/dao');
 const grader = require('./grader');
 const timerManager = require('./timerManager');
 const reviewQueue = require('./reviewQueue');
+const { checkEligibility } = require('./eligibility');
 const channelManager = require('./channelManager');
 const embeds = require('../utils/embeds');
 const { t } = require('../utils/strings');
 const { progressBarLine } = require('../utils/progressBar');
 const { fmtDurationAr, fmtDate } = require('../utils/time');
+const { resolveExamSettings } = require('../utils/examSettings');
+const { deleteReviewMessages } = require('../utils/reviewCleanup');
 const logger = require('../utils/logger');
 const state = require('../state');
 
@@ -49,10 +52,32 @@ function answersMap(attemptId) {
   return map;
 }
 
+function deadlineFor(attempt, exam) {
+  if (attempt.deadline_at) return attempt.deadline_at;
+  if (!exam || !exam.duration_min || !attempt.started_at) return null;
+  // Compatibility for attempts created before deadline_at was added.
+  return attempt.started_at + exam.duration_min * 60000;
+}
+
 function timeLeftMs(attempt, exam) {
-  if (!exam.duration_min) return null;
-  const endAt = attempt.started_at + exam.duration_min * 60000;
-  return endAt - Date.now();
+  const deadline = deadlineFor(attempt, exam);
+  return deadline === null ? null : deadline - Date.now();
+}
+
+function isExpired(attempt, exam, now = Date.now()) {
+  const deadline = deadlineFor(attempt, exam);
+  return deadline !== null && deadline <= now;
+}
+
+/** Expire an attempt before accepting an action that arrived too late. */
+async function rejectIfExpired(interaction, attempt) {
+  const exam = dao.getExam(attempt.exam_id);
+  if (!exam || !isExpired(attempt, exam)) return false;
+  await handleSubmit(attempt.id, { expired: true });
+  if (interaction && interaction.isRepliable && interaction.isRepliable()) {
+    await interaction.reply(embeds.errorPayload('error.attempt_closed')).catch(() => {});
+  }
+  return true;
 }
 
 /* ----------------------------- welcome view ------------------------------ */
@@ -288,10 +313,25 @@ async function startExam(interaction, attemptId) {
   if (attempt.status !== 'pending') {
     return void (await interaction.reply(embeds.errorPayload('error.attempt_already')));
   }
+  if (!interaction.guild || !interaction.member) {
+    return void (await interaction.reply(embeds.errorPayload('error.guild_only')));
+  }
 
   const exam = dao.getExam(attempt.exam_id);
   if (!exam || !exam.enabled || dao.countQuestions(exam.id) === 0) {
     return void (await interaction.reply(embeds.errorPayload('eligibility.disabled')));
+  }
+
+  // A pending welcome message can outlive role/blacklist/attempt changes.
+  // Re-run the full server-side eligibility check at the actual start.
+  const eligibility = checkEligibility({
+    guild: interaction.guild,
+    member: interaction.member,
+    exam,
+    excludeAttemptId: attempt.id,
+  });
+  if (!eligibility.ok) {
+    return void (await interaction.reply(embeds.errorPayload(eligibility.key, eligibility.vars || {})));
   }
 
   const questions = dao.listQuestions(exam.id);
@@ -310,9 +350,11 @@ async function startExam(interaction, attemptId) {
     }
   }
 
+  const startedAt = Date.now();
   dao.updateAttempt(attempt.id, {
     status: 'in_progress',
-    started_at: Date.now(),
+    started_at: startedAt,
+    deadline_at: exam.duration_min ? startedAt + exam.duration_min * 60000 : null,
     current_index: 0,
     question_order: JSON.stringify(finalOrder),
     choice_orders: JSON.stringify(choiceOrders),
@@ -324,9 +366,11 @@ async function startExam(interaction, attemptId) {
   await interaction.update({ content: '', ...buildQuestionMessage(fresh, 0) });
 
   const { sendLog } = require('../utils/audit');
+  const examSettings = resolveExamSettings(exam, dao.getSettings(interaction.guild.id) || {});
   await sendLog(
     interaction.guild,
-    embeds.info(t('log.attempt_started', { user: `<@${attempt.user_id}>` }), t('log.attempt_started_desc', { exam: exam.name, channel: `<#${attempt.channel_id}>` }))
+    embeds.info(t('log.attempt_started', { user: `<@${attempt.user_id}>` }), t('log.attempt_started_desc', { exam: exam.name, channel: `<#${attempt.channel_id}>` })),
+    examSettings.log_channel_id
   );
 }
 
@@ -339,6 +383,7 @@ async function navTo(interaction, attemptId, index) {
   if (attempt.user_id !== interaction.user.id) {
     return void (await interaction.reply(embeds.errorPayload('error.not_for_you')));
   }
+  if (await rejectIfExpired(interaction, attempt)) return;
   const questions = attemptQuestions(attempt);
   const idx = Math.max(0, Math.min(parseInt(index, 10) || 0, questions.length - 1));
   dao.updateAttempt(attempt.id, { current_index: idx });
@@ -378,6 +423,10 @@ async function resolveGuild(channelId = null) {
     const ch = await state.client.channels.fetch(channelId).catch(() => null);
     if (ch && ch.guild) return ch.guild;
   }
+  if (config.guildId) {
+    return state.client.guilds.cache.get(config.guildId)
+      || await state.client.guilds.fetch(config.guildId).catch(() => null);
+  }
   const guilds = await state.client.guilds.fetch().catch(() => null);
   if (guilds && guilds.size) {
     return state.client.guilds.cache.get([...guilds.keys()][0]) || null;
@@ -390,12 +439,14 @@ async function handleSubmit(attemptId, { expired = false } = {}) {
   const attempt = dao.getAttempt(attemptId);
   if (!attempt || attempt.status !== 'in_progress') return null;
 
+  const examBeforeGrade = dao.getExam(attempt.exam_id);
+  const actuallyExpired = expired || isExpired(attempt, examBeforeGrade);
   timerManager.disarm(attemptId);
   const { sendLog } = require('../utils/audit');
 
-  dao.updateAttempt(attempt.id, { submitted_at: Date.now(), expired: expired ? 1 : 0 });
+  dao.updateAttempt(attempt.id, { submitted_at: Date.now(), expired: actuallyExpired ? 1 : 0 });
   const fresh = dao.getAttempt(attempt.id);
-  const exam = dao.getAttempt(fresh.exam_id) && dao.getExam(fresh.exam_id);
+  const exam = dao.getExam(fresh.exam_id);
   const graded = grader.gradeAuto(fresh);
 
   const editExamMessage = async (payload) => {
@@ -416,22 +467,40 @@ async function handleSubmit(attemptId, { expired = false } = {}) {
     dao.updateAttempt(attempt.id, { status: 'reviewing' });
     const pendingEmbed = embeds.pending(t('result.pending'));
     pendingEmbed.setDescription(
-      `<@${fresh.user_id}>\n${expired ? t('result.expired_note') + '\n' : ''}${t('result.pending_desc')}`
+      `<@${fresh.user_id}>\n${actuallyExpired ? t('result.expired_note') + '\n' : ''}${t('result.pending_desc')}`
     );
     await editExamMessage({ content: '', embeds: [pendingEmbed], components: [] });
-    await reviewQueue.enqueue(attempt.id);
+    try {
+      await reviewQueue.enqueue(attempt.id);
+    } catch (err) {
+      dao.updateAttempt(attempt.id, { status: 'review_failed' });
+      logger.error('review queue enqueue failed:', err?.message || err);
+      const guild = await resolveGuild(fresh.channel_id);
+      const examSettings = resolveExamSettings(exam, guild ? dao.getSettings(guild.id) || {} : {});
+      await sendLog(
+        guild,
+        embeds.error(
+          t('log.review_queue_failed', { user: `<@${fresh.user_id}>` }),
+          `${exam ? exam.name : '—'} • ${err?.message || 'unknown error'}`
+        ),
+        examSettings.log_channel_id
+      );
+      return { reviewing: false, failed: true };
+    }
+    if (dao.getAttempt(attempt.id)?.status === 'graded') return { reviewing: false };
     const guild = await resolveGuild(fresh.channel_id);
     await sendLog(
       guild,
       embeds.pending(
         t('log.submitted_review', { user: `<@${fresh.user_id}>` }),
         `${exam ? exam.name : '—'} • ${t('field.auto_score')}: ${graded.autoScore}/${graded.maxScore}`
-      )
+      ),
+      resolveExamSettings(exam, guild ? dao.getSettings(guild.id) || {} : {}).log_channel_id
     );
     return { reviewing: true };
   }
 
-  return finalize(attempt.id, { noteKey: expired ? 'result.expired_note' : null });
+  return finalize(attempt.id, { noteKey: actuallyExpired ? 'result.expired_note' : null });
 }
 
 /** Compute the final result, apply role, notify, schedule cleanup. */
@@ -453,6 +522,7 @@ async function finalize(attemptId, { forcePassed = null, noteKey = null, decided
     manual_score: manualTotal,
     passed: passed ? 1 : 0,
     decided_by: decidedBy || null,
+    cleanup_at: Date.now() + config.timing.channelDeleteDelay,
   });
   const final = dao.getAttempt(attempt.id);
 
@@ -492,6 +562,16 @@ async function finalize(attemptId, { forcePassed = null, noteKey = null, decided
   );
   if (roleAdded) embed.addFields({ name: '🏅 ' + t('field.reward_role'), value: `<@&${exam.reward_role_id}>`, inline: true });
   if (noteKey) embed.addFields({ name: '📝 ' + t('field.note'), value: t(noteKey) });
+  const feedbackLines = answers
+    .filter((answer) => answer.feedback)
+    .map((answer) => {
+      const question = dao.getQuestion(answer.question_id);
+      return `• **${String(question ? question.text : 'سؤال').slice(0, 80)}**\n${String(answer.feedback).slice(0, 180)}`;
+    })
+    .join('\n');
+  if (feedbackLines) {
+    embed.addFields({ name: '💬 ' + t('field.feedback'), value: feedbackLines.slice(0, 900) });
+  }
 
   const rows = [
     new ActionRowBuilder().addComponents(
@@ -504,6 +584,7 @@ async function finalize(attemptId, { forcePassed = null, noteKey = null, decided
 
   const { sendLog } = require('../utils/audit');
   const guild = await resolveGuild(final.channel_id);
+  const examSettings = resolveExamSettings(exam, guild ? dao.getSettings(guild.id) || {} : {});
 
   if (!skipMessage) {
     try {
@@ -541,13 +622,14 @@ async function finalize(attemptId, { forcePassed = null, noteKey = null, decided
       { name: t('field.exam'), value: exam.name, inline: true },
       { name: t('field.score'), value: `${total}/${final.max_score} (${percent}%)`, inline: true },
       { name: t('field.result'), value: passed ? t('result.passed_short') : t('result.failed_short'), inline: true }
-    )
+    ),
+    examSettings.log_channel_id
   );
 
   // disable review control buttons if present
   if (final.review_msg_id) {
     try {
-      const reviewChannelId = (dao.getSettings(guild ? guild.id : '') || {}).review_channel_id;
+      const reviewChannelId = examSettings.review_channel_id;
       if (reviewChannelId) {
         const rch = await state.client.channels.fetch(reviewChannelId).catch(() => null);
         const rmsg = rch ? await rch.messages.fetch(final.review_msg_id).catch(() => null) : null;
@@ -562,6 +644,7 @@ async function finalize(attemptId, { forcePassed = null, noteKey = null, decided
     }
   }
 
+  await deleteReviewMessages(final);
   return final;
 }
 
@@ -599,6 +682,9 @@ module.exports = {
   shuffle,
   attemptQuestions,
   attemptChoiceOrder,
+  deadlineFor,
+  isExpired,
+  rejectIfExpired,
   welcomePayload,
   buildQuestionMessage,
   buildSummaryMessage,

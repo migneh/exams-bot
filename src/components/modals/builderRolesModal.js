@@ -12,13 +12,15 @@ module.exports = {
 
     const required = builder.parseRoleInput(interaction.guild, interaction.fields.getTextInputValue('required_role'));
     const reward = builder.parseRoleInput(interaction.guild, interaction.fields.getTextInputValue('reward_role'));
-    if (!required.ok || !reward.ok) {
+    const staff = builder.parseRoleInput(interaction.guild, interaction.fields.getTextInputValue('staff_role'));
+    if (!required.ok || !reward.ok || !staff.ok) {
       return void (await interaction.reply(embeds.errorPayload('builder.bad_role')));
     }
 
     dao.updateExam(exam.id, {
       required_role_id: required.value,
       reward_role_id: reward.value,
+      staff_role_id: staff.value,
     });
     await interaction.update(builder.home(exam.id));
   },

@@ -1,6 +1,8 @@
 const { ChannelType, PermissionFlagsBits, OverwriteType } = require('discord.js');
 const config = require('../config');
 const logger = require('../utils/logger');
+const dao = require('../database/dao');
+const state = require('../state');
 
 function sanitizeName(name) {
   const cleaned = String(name || '')
@@ -80,7 +82,17 @@ function scheduleDelete(channel, delayMs = config.timing.channelDeleteDelay) {
     } catch (err) {
       logger.debug('channel cleanup skipped:', err?.message || err);
     }
-  }, delayMs).unref?.();
+  }, Math.max(0, delayMs)).unref?.();
 }
 
-module.exports = { createExamChannel, scheduleDelete, sanitizeName };
+/** Recover cleanup jobs lost during a process restart. */
+async function hydrate() {
+  if (!state.client) return;
+  for (const attempt of dao.listPendingCleanup()) {
+    const delay = Math.max(0, (attempt.cleanup_at || Date.now()) - Date.now());
+    const channel = await state.client.channels.fetch(attempt.channel_id).catch(() => null);
+    if (channel) scheduleDelete(channel, delay);
+  }
+}
+
+module.exports = { createExamChannel, scheduleDelete, hydrate, sanitizeName };

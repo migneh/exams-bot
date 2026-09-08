@@ -7,6 +7,7 @@ const {
   ButtonStyle,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  ChannelType,
 } = require('discord.js');
 const dao = require('../database/dao');
 const embeds = require('../utils/embeds');
@@ -23,8 +24,12 @@ function truncate(s, n) {
 /* ------------------------------ input parsing ---------------------------- */
 
 function parseNumber(input, { min, max, fallback = null } = {}) {
-  const n = parseInt(String(input).replace(/[^\d-]/g, ''), 10);
-  if (Number.isNaN(n)) return { ok: false, value: fallback };
+  const normalized = String(input ?? '')
+    .trim()
+    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
+  if (!/^-?\d+$/.test(normalized)) return { ok: false, value: fallback };
+  const n = Number(normalized);
+  if (!Number.isFinite(n)) return { ok: false, value: fallback };
   if (min !== undefined && n < min) return { ok: false, value: fallback };
   if (max !== undefined && n > max) return { ok: false, value: fallback };
   return { ok: true, value: n };
@@ -42,7 +47,7 @@ function parseBasics(fields) {
   const pass = parseNumber(fields.pass_percent, { min: 1, max: 100 });
   if (!pass.ok) return { ok: false, key: 'builder.bad_pass' };
 
-  const combo = String(fields.combo || '1, 24');
+  const combo = String(fields.combo || '1, 24').replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
   const nums = combo.split(/[^\d]+/).filter((x) => x !== '');
   const attempts = parseNumber(nums[0] ?? '1', { min: 0, max: 50, fallback: 1 });
   const cooldown = parseNumber(nums[1] ?? '24', { min: 0, max: 1000, fallback: 24 });
@@ -104,6 +109,21 @@ function parseRoleInput(guild, input) {
   return byName ? { ok: true, value: byName.id } : { ok: false, value: null };
 }
 
+/** Channel input accepts an ID, #mention, exact name, or - to inherit global settings. */
+function parseChannelInput(guild, input, { category = false } = {}) {
+  const raw = String(input || '').trim();
+  if (!raw || raw === '-') return { ok: true, value: null };
+  if (!guild) return { ok: false, value: null };
+  const mention = raw.match(/^<#(\d+)>$/);
+  const id = mention ? mention[1] : raw;
+  let channel = /^\d+$/.test(id) ? guild.channels.cache.get(id) : null;
+  if (!channel) channel = guild.channels.cache.find((item) => item.name.toLowerCase() === raw.toLowerCase());
+  if (!channel || (category ? channel.type !== ChannelType.GuildCategory : ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(channel.type))) {
+    return { ok: false, value: null };
+  }
+  return { ok: true, value: channel.id };
+}
+
 function parseQuestion(fields) {
   const text = (fields.text || '').trim();
   if (!text || text.length > config.limits.maxTextLen) return { ok: false, key: 'builder.bad_text' };
@@ -128,6 +148,10 @@ function settingsSummary(exam) {
     `▸ ${t('field.shuffle_answers')}: **${exam.shuffle_answers ? t('common.yes') : t('common.no')}**`,
     `▸ ${t('field.required_role')}: **${exam.required_role_id ? `<@&${exam.required_role_id}>` : t('field.none')}**`,
     `▸ ${t('field.reward_role')}: **${exam.reward_role_id ? `<@&${exam.reward_role_id}>` : t('field.none')}**`,
+    `▸ ${t('field.staff_role')}: **${exam.staff_role_id ? `<@&${exam.staff_role_id}>` : t('field.inherit')}**`,
+    `▸ ${t('field.review_channel')}: **${exam.review_channel_id ? `<#${exam.review_channel_id}>` : t('field.inherit')}**`,
+    `▸ ${t('field.log_channel')}: **${exam.log_channel_id ? `<#${exam.log_channel_id}>` : t('field.inherit')}**`,
+    `▸ ${t('field.exams_category')}: **${exam.exams_category_id ? `<#${exam.exams_category_id}>` : t('field.inherit')}**`,
   ].join('\n');
 }
 
@@ -135,6 +159,17 @@ function home(examId) {
   const exam = dao.getExam(examId);
   if (!exam) return { embeds: [embeds.error(t('error.title'), t('error.exam_not_found'))], components: [] };
   const questions = dao.listQuestions(exam.id);
+  const questionLines = [];
+  for (const [i, q] of questions.entries()) {
+    const line = `${i + 1}. ${t(`type.${q.type}`)} — ${truncate(q.text, 45)} \`(${q.points} ${t('field.points_unit')})\``;
+    const suffix = questions.length > i + 1 ? `\n… +${questions.length - i - 1}` : '';
+    if ((questionLines.join('\n') + '\n' + line + suffix).length > 950) break;
+    questionLines.push(line);
+    if (questionLines.length >= config.limits.maxQuestionsListed) break;
+  }
+  const questionValue = questions.length
+    ? questionLines.join('\n') + (questionLines.length < questions.length ? `\n… +${questions.length - questionLines.length}` : '')
+    : t('builder.no_questions');
 
   const embed = embeds.brand(
     new (require('discord.js').EmbedBuilder)()
@@ -151,15 +186,7 @@ function home(examId) {
     },
     {
       name: `📋 ${t('builder.questions_field')} (${questions.length})`,
-      value: questions.length
-        ? questions
-            .slice(0, config.limits.maxQuestionsListed)
-            .map(
-              (q, i) =>
-                `${i + 1}. ${t(`type.${q.type}`)} — ${truncate(q.text, 60)} \`(${q.points} ${t('field.points_unit')})\``
-            )
-            .join('\n') + (questions.length > config.limits.maxQuestionsListed ? `\n… +${questions.length - config.limits.maxQuestionsListed}` : '')
-        : t('builder.no_questions'),
+      value: questionValue,
     }
   );
 
@@ -173,6 +200,7 @@ function home(examId) {
       new ButtonBuilder().setCustomId(`builder:settings:${exam.id}`).setLabel(t('builder.settings')).setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`builder:adv:${exam.id}`).setLabel(t('builder.advanced')).setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`builder:roles:${exam.id}`).setLabel(t('builder.roles')).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`builder:channels:${exam.id}`).setLabel(t('builder.channels')).setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`builder:delete:${exam.id}`).setLabel(t('builder.delete_exam')).setStyle(ButtonStyle.Danger)
     ),
   ];
@@ -521,6 +549,65 @@ function makeRolesModal(customId, prefill = {}) {
         prefill.reward_role_id ? `<@&${prefill.reward_role_id}>` : '-',
         30
       )
+    ),
+    inputRow(
+      applyValue(
+        new TextInputBuilder()
+          .setCustomId('staff_role')
+          .setLabel(t('modal.staff_role'))
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(30)
+          .setPlaceholder('-'),
+        prefill.staff_role_id ? `<@&${prefill.staff_role_id}>` : '-',
+        30
+      )
+    )
+  );
+  return modal;
+}
+
+function makeChannelsModal(customId, prefill = {}) {
+  const modal = new ModalBuilder().setCustomId(customId).setTitle(t('modal.channels_title'));
+  modal.addComponents(
+    inputRow(
+      applyValue(
+        new TextInputBuilder()
+          .setCustomId('review_channel')
+          .setLabel(t('modal.review_channel'))
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(100)
+          .setPlaceholder('-'),
+        prefill.review_channel_id ? `<#${prefill.review_channel_id}>` : '-',
+        100
+      )
+    ),
+    inputRow(
+      applyValue(
+        new TextInputBuilder()
+          .setCustomId('log_channel')
+          .setLabel(t('modal.log_channel'))
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(100)
+          .setPlaceholder('-'),
+        prefill.log_channel_id ? `<#${prefill.log_channel_id}>` : '-',
+        100
+      )
+    ),
+    inputRow(
+      applyValue(
+        new TextInputBuilder()
+          .setCustomId('exams_category')
+          .setLabel(t('modal.exams_category'))
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(100)
+          .setPlaceholder('-'),
+        prefill.exams_category_id ? `<#${prefill.exams_category_id}>` : '-',
+        100
+      )
     )
   );
   return modal;
@@ -606,6 +693,7 @@ module.exports = {
   parseBasics,
   parseAdvanced,
   parseRoleInput,
+  parseChannelInput,
   parseQuestion,
   home,
   typeSelect,
@@ -618,6 +706,7 @@ module.exports = {
   makeBasicsModal,
   makeAdvancedModal,
   makeRolesModal,
+  makeChannelsModal,
   makeQuestionModal,
   makeChoiceModal,
   makeConfirmModal,

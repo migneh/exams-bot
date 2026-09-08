@@ -11,6 +11,7 @@ module.exports = {
       statuses: ['in_progress'],
     });
     if (!attempt) return;
+    if (await engine.rejectIfExpired(interaction, attempt)) return;
     const question = questionInAttempt(attempt, questionId);
     if (!question || (question.type !== 'short' && question.type !== 'long')) {
       return void (await interaction.reply(embeds.errorPayload('error.invalid_input')));

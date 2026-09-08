@@ -4,6 +4,7 @@ const embeds = require('../../utils/embeds');
 const { t } = require('../../utils/strings');
 const { isStaff } = require('../../utils/perms');
 const { sendLog } = require('../../utils/audit');
+const { resolveExamSettings } = require('../../utils/examSettings');
 
 /** Confirmations for: force-accept / request retake / final rejection. */
 module.exports = [
@@ -19,7 +20,8 @@ module.exports = [
         embeds.success(
           t('log.review_accepted', { user: `<@${interaction.user.id}>` }),
           `<@${attempt.user_id}> • ${dao.getExam(attempt.exam_id)?.name || '—'}`
-        )
+        ),
+        resolveExamSettings(dao.getExam(attempt.exam_id), dao.getSettings(interaction.guildId) || {}).log_channel_id
       );
     },
   },
@@ -37,7 +39,8 @@ module.exports = [
         embeds.warn(
           t('log.review_retake', { user: `<@${interaction.user.id}>` }),
           `<@${attempt.user_id}> • ${dao.getExam(attempt.exam_id)?.name || '—'}`
-        )
+        ),
+        resolveExamSettings(dao.getExam(attempt.exam_id), dao.getSettings(interaction.guildId) || {}).log_channel_id
       );
     },
   },
@@ -53,14 +56,16 @@ module.exports = [
         embeds.error(
           t('log.review_rejected', { user: `<@${interaction.user.id}>` }),
           `<@${attempt.user_id}> • ${dao.getExam(attempt.exam_id)?.name || '—'}`
-        )
+        ),
+        resolveExamSettings(dao.getExam(attempt.exam_id), dao.getSettings(interaction.guildId) || {}).log_channel_id
       );
     },
   },
 ];
 
 async function guard(interaction, attemptId) {
-  if (!isStaff(interaction)) {
+  const attempt = dao.getAttempt(attemptId);
+  if (!isStaff(interaction, attempt?.exam_id)) {
     await interaction.reply(embeds.errorPayload('error.not_staff')).catch(() => {});
     return false;
   }
@@ -69,7 +74,6 @@ async function guard(interaction, attemptId) {
     await interaction.reply(embeds.errorPayload('error.confirm_word')).catch(() => {});
     return false;
   }
-  const attempt = dao.getAttempt(attemptId);
   if (!attempt || attempt.status !== 'reviewing') {
     await interaction.reply(embeds.errorPayload('error.attempt_closed')).catch(() => {});
     return false;

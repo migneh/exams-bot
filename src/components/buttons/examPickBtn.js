@@ -10,6 +10,7 @@ module.exports = {
       statuses: ['in_progress'],
     });
     if (!attempt) return;
+    if (await engine.rejectIfExpired(interaction, attempt)) return;
     const question = questionInAttempt(attempt, questionId);
     const choice = dao.getChoice(choiceId);
     if (!question || !choice || choice.question_id !== question.id) {

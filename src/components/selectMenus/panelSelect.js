@@ -6,6 +6,8 @@ const { checkEligibility } = require('../../systems/eligibility');
 const channelManager = require('../../systems/channelManager');
 const engine = require('../../systems/examEngine');
 const { sendLog } = require('../../utils/audit');
+const { resolveExamSettings } = require('../../utils/examSettings');
+const logger = require('../../utils/logger');
 
 /** Application panel: member picks an exam → eligibility → private channel. */
 module.exports = {
@@ -19,10 +21,7 @@ module.exports = {
       return void (await interaction.editReply({ embeds: [embeds.error(t('error.title'), t('eligibility.disabled'))] }));
     }
 
-    const settings = dao.getSettings(interaction.guildId);
-    if (!settings) {
-      return void (await interaction.editReply({ embeds: [embeds.error(t('error.title'), t('error.no_settings'))] }));
-    }
+    const settings = resolveExamSettings(exam, dao.getSettings(interaction.guildId) || {});
 
     const member = interaction.member;
     const eligibility = checkEligibility({ guild: interaction.guild, member, exam });
@@ -32,21 +31,30 @@ module.exports = {
       }));
     }
 
-    // create the private exam channel + pending attempt
+    // Create the private exam channel + pending attempt. Discord channel
+    // creation is not transactional with SQLite, so every partial failure is
+    // explicitly cleaned up below.
     let channel;
+    let attempt;
     try {
+      if (dao.activeAttemptFor(member.id, exam.id)) {
+        return void (await interaction.editReply({
+          embeds: [embeds.error(t('error.title'), t('eligibility.in_progress', { channel: '—' }))],
+        }));
+      }
       const attemptNumber = dao.nextAttemptNumber(member.id, exam.id);
       channel = await channelManager.createExamChannel(interaction.guild, member, attemptNumber, settings);
-      const attempt = dao.createAttempt({
+      attempt = dao.createAttempt({
         exam_id: exam.id,
         user_id: member.id,
         channel_id: channel.id,
         attempt_number: attemptNumber,
       });
       await channel.send(engine.welcomePayload(exam, attempt, member));
-      dao.updateAttempt(attempt.id, { channel_id: channel.id });
     } catch (err) {
       logger.error('channel creation failed:', err);
+      if (attempt) dao.deleteAttempt(attempt.id);
+      if (channel) await channel.delete('Exams system — rollback failed application').catch(() => {});
       return void (await interaction.editReply({ embeds: [embeds.error(t('error.title'), t('error.generic'))] }));
     }
 
@@ -59,7 +67,8 @@ module.exports = {
       embeds.info(
         t('log.applied', { user: `<@${member.id}>` }),
         `${exam.name} • <#${channel.id}>`
-      )
+      ),
+      settings.log_channel_id
     );
   },
 };

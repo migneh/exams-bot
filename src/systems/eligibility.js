@@ -5,7 +5,7 @@ const { fmtDate } = require('../utils/time');
  * Full eligibility check before creating/starting an attempt.
  * Returns { ok: true } or { ok: false, key, vars } — key is a locale string.
  */
-function checkEligibility({ guild, member, exam }) {
+function checkEligibility({ guild, member, exam, excludeAttemptId = null }) {
   // 1. Blacklist
   if (dao.isBlacklisted(member.id)) {
     return { ok: false, key: 'eligibility.blacklisted' };
@@ -27,7 +27,7 @@ function checkEligibility({ guild, member, exam }) {
   }
 
   // 4. Live attempt already exists → point to the channel
-  const active = dao.activeAttemptFor(member.id, exam.id);
+  const active = dao.activeAttemptFor(member.id, exam.id, excludeAttemptId);
   if (active) {
     return {
       ok: false,

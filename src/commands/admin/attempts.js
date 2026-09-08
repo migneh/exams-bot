@@ -4,13 +4,16 @@ const dao = require('../../database/dao');
 const embeds = require('../../utils/embeds');
 const { requireStaff } = require('../../utils/perms');
 const { sendLog } = require('../../utils/audit');
+const { resolveExamSettings } = require('../../utils/examSettings');
 const { fmtDate } = require('../../utils/time');
 const channelManager = require('../../systems/channelManager');
+const timerManager = require('../../systems/timerManager');
 
 const STATUS_EMOJI = {
   pending: '📭',
   in_progress: '✍️',
   reviewing: '⏳',
+  review_failed: '⚠️',
   graded: '🏁',
   cancelled: '🚫',
   retake: '🔄',
@@ -69,13 +72,14 @@ module.exports = {
     } else if (sub === 'reset') {
       const exam = dao.getExam(interaction.options.getString('exam'));
       if (!exam) return void (await interaction.reply(embeds.errorPayload('error.exam_not_found')));
-      dao.resetAttempts(user.id, exam.id);
-      // close any live channel from cancelled attempts
-      for (const attempt of dao.attemptsByUser(user.id)) {
-        if (attempt.exam_id === exam.id && ['pending', 'in_progress'].includes(attempt.status)) {
-          const ch = await interaction.guild.channels.fetch(attempt.channel_id).catch(() => null);
-          if (ch) channelManager.scheduleDelete(ch, 5000);
-        }
+      const liveAttempts = dao.resetAttempts(user.id, exam.id);
+      // Close channels and disarm timers for attempts that were just
+      // cancelled. Querying attemptsByUser after reset would only see the new
+      // `cancelled` status and leak the channels.
+      for (const attempt of liveAttempts) {
+        timerManager.disarm(attempt.id);
+        const ch = await interaction.guild.channels.fetch(attempt.channel_id).catch(() => null);
+        if (ch) channelManager.scheduleDelete(ch, 5000);
       }
       await interaction.reply({
         embeds: [
@@ -91,7 +95,8 @@ module.exports = {
         embeds.warn(
           t('log.attempts_reset', { user: `<@${user.id}>` }),
           `${exam.name} • <@${interaction.user.id}>`
-        )
+        ),
+        resolveExamSettings(exam, dao.getSettings(interaction.guildId) || {}).log_channel_id
       );
     }
   },

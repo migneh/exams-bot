@@ -3,6 +3,7 @@ const embeds = require('../../utils/embeds');
 const { t } = require('../../utils/strings');
 const { isStaff } = require('../../utils/perms');
 const { sendLog } = require('../../utils/audit');
+const { resolveExamSettings } = require('../../utils/examSettings');
 
 module.exports = {
   id: 'builder:deletem',
@@ -14,6 +15,13 @@ module.exports = {
     }
     const exam = dao.getExam(examId);
     if (!exam) return void (await interaction.reply(embeds.errorPayload('error.exam_not_found')));
+    const openAttempts = dao.attemptsForExam(exam.id).filter((attempt) =>
+      ['pending', 'in_progress', 'reviewing', 'review_failed'].includes(attempt.status)
+    );
+    if (openAttempts.length) {
+      return void (await interaction.reply(embeds.errorPayload('builder.delete_active')));
+    }
+    const logChannelId = resolveExamSettings(exam, dao.getSettings(interaction.guildId) || {}).log_channel_id;
     dao.deleteExam(exam.id);
     await interaction.update({
       embeds: [embeds.success(t('builder.deleted_title'), t('builder.deleted_desc', { name: exam.name }))],
@@ -21,7 +29,8 @@ module.exports = {
     });
     await sendLog(
       interaction.guild,
-      embeds.error(t('log.exam_deleted', { name: exam.name }), `<@${interaction.user.id}>`)
+      embeds.error(t('log.exam_deleted', { name: exam.name }), `<@${interaction.user.id}>`),
+      logChannelId
     );
   },
 };

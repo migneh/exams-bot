@@ -3,6 +3,7 @@ const embeds = require('../../utils/embeds');
 const { t } = require('../../utils/strings');
 const { isStaff } = require('../../utils/perms');
 const { sendLog } = require('../../utils/audit');
+const { resolveExamSettings } = require('../../utils/examSettings');
 
 function truncate(s, n = 50) {
   s = String(s || '');
@@ -21,16 +22,30 @@ module.exports = {
     }
 
     const warnings = [];
+    let invalid = false;
     for (const q of dao.listQuestions(exam.id)) {
       if (['mcq_single', 'mcq_multi', 'true_false'].includes(q.type)) {
         const choices = dao.listChoices(q.id);
         const correct = choices.filter((c) => c.is_correct).length;
         if (choices.length < 2) {
+          invalid = true;
           warnings.push(`⚠️ ${t('builder.warn_min_choices')} — ${truncate(q.text)}`);
-        } else if (correct === 0) {
+        }
+        if (correct === 0) {
+          invalid = true;
           warnings.push(`⚠️ ${t('builder.warn_no_correct')} — ${truncate(q.text)}`);
         }
+        if (q.type === 'mcq_single' && correct !== 1) {
+          invalid = true;
+          warnings.push(`⚠️ ${t('builder.warn_multi_correct')} — ${truncate(q.text)}`);
+        }
       }
+    }
+
+    if (invalid) {
+      return void (await interaction.reply({
+        embeds: [embeds.error(t('error.title'), `${t('builder.home_desc')}\n\n${warnings.join('\n')}`)],
+      }));
     }
 
     dao.updateExam(exam.id, { enabled: 1 });
@@ -47,7 +62,8 @@ module.exports = {
       embeds.success(
         t('log.exam_saved', { name: exam.name }),
         `<@${interaction.user.id}> • ${count} ${t('field.questions')}`
-      )
+      ),
+      resolveExamSettings(exam, dao.getSettings(interaction.guildId) || {}).log_channel_id
     );
   },
 };

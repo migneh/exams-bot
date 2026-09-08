@@ -93,7 +93,7 @@ function arm(attemptId) {
   const exam = dao.getExam(attempt.exam_id);
   if (!exam || !exam.duration_min) return;
 
-  const endAt = attempt.started_at + exam.duration_min * 60000;
+  const endAt = attempt.deadline_at || attempt.started_at + exam.duration_min * 60000;
   const remaining = endAt - Date.now();
   if (remaining <= 0) {
     require('./examEngine').handleSubmit(attemptId, { expired: true }).catch((e) =>

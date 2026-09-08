@@ -1,10 +1,9 @@
 const logger = require('../utils/logger');
 
 /**
- * Schema migrations (CREATE TABLE IF NOT EXISTS — safe on every boot).
- * Extended beyond the base plan with: attempts.message_id, current_index,
- * question_order, choice_orders, review_msg_id, expired, decided_by;
- * answers.shown_at, graded_by — all needed for restart-proof exams.
+ * Schema bootstrap plus additive migrations. CREATE TABLE IF NOT EXISTS alone
+ * does not add columns to an existing database, so the small ALTER TABLE block
+ * below is intentionally kept idempotent as well.
  */
 module.exports = function migrate(db) {
   db.pragma('journal_mode = WAL');
@@ -29,6 +28,10 @@ module.exports = function migrate(db) {
       cooldown_hours INTEGER DEFAULT 24,
       required_role_id TEXT,
       reward_role_id TEXT,
+      staff_role_id TEXT,
+      review_channel_id TEXT,
+      log_channel_id TEXT,
+      exams_category_id TEXT,
       shuffle_questions INTEGER DEFAULT 1,
       shuffle_answers INTEGER DEFAULT 1,
       questions_per_attempt INTEGER,
@@ -61,6 +64,7 @@ module.exports = function migrate(db) {
       channel_id TEXT,
       message_id TEXT,
       review_msg_id TEXT,
+      review_answer_msg_ids TEXT,
       status TEXT,
       attempt_number INTEGER,
       current_index INTEGER DEFAULT 0,
@@ -73,7 +77,9 @@ module.exports = function migrate(db) {
       expired INTEGER DEFAULT 0,
       decided_by TEXT,
       started_at INTEGER,
-      submitted_at INTEGER
+      submitted_at INTEGER,
+      deadline_at INTEGER,
+      cleanup_at INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS answers (
@@ -103,6 +109,25 @@ module.exports = function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_attempts_user ON attempts(user_id);
     CREATE INDEX IF NOT EXISTS idx_answers_attempt ON answers(attempt_id);
   `);
+
+  // Additive migrations for databases created before per-exam overrides,
+  // restart-proof deadlines, and persisted cleanup jobs were introduced.
+  const examColumns = db.prepare('PRAGMA table_info(exams)').all().map((row) => row.name);
+  for (const column of ['staff_role_id', 'review_channel_id', 'log_channel_id', 'exams_category_id']) {
+    if (!examColumns.includes(column)) db.exec(`ALTER TABLE exams ADD COLUMN ${column} TEXT`);
+  }
+
+  const attemptColumns = db.prepare('PRAGMA table_info(attempts)').all().map((row) => row.name);
+  if (!attemptColumns.includes('deadline_at')) db.exec('ALTER TABLE attempts ADD COLUMN deadline_at INTEGER');
+  if (!attemptColumns.includes('cleanup_at')) db.exec('ALTER TABLE attempts ADD COLUMN cleanup_at INTEGER');
+  if (!attemptColumns.includes('review_answer_msg_ids')) db.exec('ALTER TABLE attempts ADD COLUMN review_answer_msg_ids TEXT');
+
+  // Prevent the most common double-click/race condition. A legacy database
+  // containing duplicate live attempts must be repaired before this index is
+  // introduced; failing loudly is safer than silently weakening the invariant.
+  db.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_attempts_one_active ON attempts(user_id, exam_id) WHERE status IN ('pending','in_progress')"
+  );
 
   logger.info('database ready (schema migrated)');
 };

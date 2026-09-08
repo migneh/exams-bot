@@ -64,6 +64,10 @@ function createExam(fields) {
     cooldown_hours: fields.cooldown_hours ?? 24,
     required_role_id: fields.required_role_id || null,
     reward_role_id: fields.reward_role_id || null,
+    staff_role_id: fields.staff_role_id || null,
+    review_channel_id: fields.review_channel_id || null,
+    log_channel_id: fields.log_channel_id || null,
+    exams_category_id: fields.exams_category_id || null,
     shuffle_questions: fields.shuffle_questions === false ? 0 : 1,
     shuffle_answers: fields.shuffle_answers === false ? 0 : 1,
     questions_per_attempt: fields.questions_per_attempt || null,
@@ -73,10 +77,12 @@ function createExam(fields) {
   };
   db.prepare(
     `INSERT INTO exams (id, name, description, duration_min, pass_percent, max_attempts,
-      cooldown_hours, required_role_id, reward_role_id, shuffle_questions, shuffle_answers,
+      cooldown_hours, required_role_id, reward_role_id, staff_role_id, review_channel_id,
+      log_channel_id, exams_category_id, shuffle_questions, shuffle_answers,
       questions_per_attempt, enabled, created_by, created_at)
      VALUES (@id, @name, @description, @duration_min, @pass_percent, @max_attempts,
-      @cooldown_hours, @required_role_id, @reward_role_id, @shuffle_questions, @shuffle_answers,
+      @cooldown_hours, @required_role_id, @reward_role_id, @staff_role_id, @review_channel_id,
+      @log_channel_id, @exams_category_id, @shuffle_questions, @shuffle_answers,
       @questions_per_attempt, @enabled, @created_by, @created_at)`
   ).run(clean(exam));
   return getExam(exam.id);
@@ -84,10 +90,35 @@ function createExam(fields) {
 
 const updateExam = (id, patch) => buildUpdate('exams', id, patch);
 
+function updateExamSettings(id, patch) {
+  const allowed = ['staff_role_id', 'review_channel_id', 'log_channel_id', 'exams_category_id'];
+  updateExam(id, Object.fromEntries(Object.entries(patch || {}).filter(([key]) => allowed.includes(key))));
+  return getExamSettings(id);
+}
+
+function getExamSettings(id) {
+  const exam = getExam(id);
+  if (!exam) return null;
+  return {
+    staff_role_id: exam.staff_role_id || null,
+    review_channel_id: exam.review_channel_id || null,
+    log_channel_id: exam.log_channel_id || null,
+    exams_category_id: exam.exams_category_id || null,
+  };
+}
+
 function deleteExam(id) {
-  db.prepare('DELETE FROM answers WHERE attempt_id IN (SELECT id FROM attempts WHERE exam_id = ?)').run(id);
-  db.prepare('DELETE FROM attempts WHERE exam_id = ?').run(id);
-  db.prepare('DELETE FROM exams WHERE id = ?').run(id);
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM answers WHERE attempt_id IN (SELECT id FROM attempts WHERE exam_id = ?)').run(id);
+    db.prepare('DELETE FROM attempts WHERE exam_id = ?').run(id);
+    db.prepare('DELETE FROM exams WHERE id = ?').run(id);
+  });
+  tx();
+}
+
+function deleteAttempt(id) {
+  db.prepare('DELETE FROM answers WHERE attempt_id = ?').run(id);
+  db.prepare('DELETE FROM attempts WHERE id = ?').run(id);
 }
 
 function duplicateExam(id, createdBy) {
@@ -182,6 +213,7 @@ function createAttempt({ exam_id, user_id, channel_id, attempt_number }) {
     channel_id,
     message_id: null,
     review_msg_id: null,
+    review_answer_msg_ids: null,
     status: 'pending',
     attempt_number,
     current_index: 0,
@@ -195,14 +227,16 @@ function createAttempt({ exam_id, user_id, channel_id, attempt_number }) {
     decided_by: null,
     started_at: null,
     submitted_at: null,
+    deadline_at: null,
+    cleanup_at: null,
   };
   db.prepare(
-    `INSERT INTO attempts (id, exam_id, user_id, channel_id, message_id, review_msg_id, status,
+    `INSERT INTO attempts (id, exam_id, user_id, channel_id, message_id, review_msg_id, review_answer_msg_ids, status,
       attempt_number, current_index, question_order, choice_orders, auto_score, manual_score,
-      max_score, passed, expired, decided_by, started_at, submitted_at)
-     VALUES (@id, @exam_id, @user_id, @channel_id, @message_id, @review_msg_id, @status,
+      max_score, passed, expired, decided_by, started_at, submitted_at, deadline_at, cleanup_at)
+     VALUES (@id, @exam_id, @user_id, @channel_id, @message_id, @review_msg_id, @review_answer_msg_ids, @status,
       @attempt_number, @current_index, @question_order, @choice_orders, @auto_score, @manual_score,
-      @max_score, @passed, @expired, @decided_by, @started_at, @submitted_at)`
+      @max_score, @passed, @expired, @decided_by, @started_at, @submitted_at, @deadline_at, @cleanup_at)`
   ).run(a);
   return getAttempt(a.id);
 }
@@ -212,12 +246,35 @@ const updateAttempt = (id, patch) => buildUpdate('attempts', id, patch);
 const listInProgress = () =>
   db.prepare("SELECT * FROM attempts WHERE status = 'in_progress'").all();
 
-const activeAttemptFor = (userId, examId) =>
+const listPendingCleanup = () =>
+  db
+    .prepare("SELECT * FROM attempts WHERE cleanup_at IS NOT NULL AND status IN ('cancelled','retake','graded')")
+    .all();
+
+const listReviewQueuePending = () =>
+  db
+    .prepare("SELECT * FROM attempts WHERE status = 'review_failed' OR (status = 'reviewing' AND review_msg_id IS NULL)")
+    .all();
+
+const activeAttemptsByUser = (userId, examId = null) =>
   db
     .prepare(
-      "SELECT * FROM attempts WHERE user_id = ? AND exam_id = ? AND status IN ('pending','in_progress') ORDER BY rowid DESC"
+      `SELECT * FROM attempts
+       WHERE user_id = ? AND status IN ('pending','in_progress')
+       ${examId ? 'AND exam_id = ?' : ''}
+       ORDER BY rowid DESC`
     )
-    .get(userId, examId) || null;
+    .all(...(examId ? [userId, examId] : [userId]));
+
+const activeAttemptFor = (userId, examId, excludeId = null) =>
+  db
+    .prepare(
+      `SELECT * FROM attempts
+       WHERE user_id = ? AND exam_id = ? AND status IN ('pending','in_progress','review_failed')
+       ${excludeId ? 'AND id != ?' : ''}
+       ORDER BY rowid DESC`
+    )
+    .get(...(excludeId ? [userId, examId, excludeId] : [userId, examId])) || null;
 
 const hasPassed = (userId, examId) =>
   !!db
@@ -226,13 +283,13 @@ const hasPassed = (userId, examId) =>
 
 const finishedAttemptsCount = (userId, examId) =>
   db
-    .prepare("SELECT COUNT(*) AS c FROM attempts WHERE user_id = ? AND exam_id = ? AND status IN ('reviewing','graded')")
+    .prepare("SELECT COUNT(*) AS c FROM attempts WHERE user_id = ? AND exam_id = ? AND status IN ('reviewing','review_failed','graded')")
     .get(userId, examId).c;
 
 const lastFinishedAttempt = (userId, examId) =>
   db
     .prepare(
-      "SELECT * FROM attempts WHERE user_id = ? AND exam_id = ? AND status IN ('reviewing','graded') AND submitted_at IS NOT NULL ORDER BY submitted_at DESC"
+      "SELECT * FROM attempts WHERE user_id = ? AND exam_id = ? AND status IN ('reviewing','review_failed','graded') AND submitted_at IS NOT NULL ORDER BY submitted_at DESC"
     )
     .get(userId, examId) || null;
 
@@ -373,7 +430,7 @@ function examStats(examId) {
   const row = db
     .prepare(
       `SELECT COUNT(*) AS total,
-              SUM(CASE WHEN status IN ('reviewing','graded') THEN 1 ELSE 0 END) AS finished,
+              SUM(CASE WHEN status IN ('reviewing','review_failed','graded') THEN 1 ELSE 0 END) AS finished,
               SUM(CASE WHEN status = 'graded' THEN 1 ELSE 0 END) AS graded,
               SUM(CASE WHEN status = 'graded' AND passed = 1 THEN 1 ELSE 0 END) AS passed,
               SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress
@@ -413,16 +470,22 @@ function hardestQuestions(examId, limit = 5) {
 }
 
 function resetAttempts(userId, examId) {
-  // Cancel any live attempts, delete finished history (answers cascade).
-  db.prepare(
-    "UPDATE attempts SET status = 'cancelled' WHERE user_id = ? AND exam_id = ? AND status IN ('pending','in_progress')"
-  ).run(userId, examId);
-  db.prepare(
-    "DELETE FROM answers WHERE attempt_id IN (SELECT id FROM attempts WHERE user_id = ? AND exam_id = ? AND status IN ('reviewing','graded','retake'))"
-  ).run(userId, examId);
-  db.prepare(
-    "DELETE FROM attempts WHERE user_id = ? AND exam_id = ? AND status IN ('reviewing','graded','retake')"
-  ).run(userId, examId);
+  // Return live rows before changing their status so callers can clean up the
+  // associated channels and in-memory timers as well.
+  const live = activeAttemptsByUser(userId, examId);
+  const tx = db.transaction(() => {
+    db.prepare(
+      "UPDATE attempts SET status = 'cancelled', cleanup_at = ? WHERE user_id = ? AND exam_id = ? AND status IN ('pending','in_progress')"
+    ).run(Date.now() + 5000, userId, examId);
+    db.prepare(
+      "DELETE FROM answers WHERE attempt_id IN (SELECT id FROM attempts WHERE user_id = ? AND exam_id = ? AND status IN ('reviewing','review_failed','graded','retake'))"
+    ).run(userId, examId);
+    db.prepare(
+      "DELETE FROM attempts WHERE user_id = ? AND exam_id = ? AND status IN ('reviewing','review_failed','graded','retake')"
+    ).run(userId, examId);
+  });
+  tx();
+  return live;
 }
 
 module.exports = {
@@ -434,7 +497,10 @@ module.exports = {
   listOpenExams,
   createExam,
   updateExam,
+  updateExamSettings,
+  getExamSettings,
   deleteExam,
+  deleteAttempt,
   duplicateExam,
   getQuestion,
   listQuestions,
@@ -452,6 +518,9 @@ module.exports = {
   createAttempt,
   updateAttempt,
   listInProgress,
+  listPendingCleanup,
+  listReviewQueuePending,
+  activeAttemptsByUser,
   activeAttemptFor,
   hasPassed,
   finishedAttemptsCount,
