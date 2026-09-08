@@ -6,6 +6,7 @@ const { checkEligibility } = require('../../systems/eligibility');
 const channelManager = require('../../systems/channelManager');
 const engine = require('../../systems/examEngine');
 const { sendLog } = require('../../utils/audit');
+const { resolveExamSettings } = require('../../utils/examSettings');
 const logger = require('../../utils/logger');
 
 /** Application panel: member picks an exam → eligibility → private channel. */
@@ -20,10 +21,7 @@ module.exports = {
       return void (await interaction.editReply({ embeds: [embeds.error(t('error.title'), t('eligibility.disabled'))] }));
     }
 
-    const settings = dao.getSettings(interaction.guildId);
-    if (!settings) {
-      return void (await interaction.editReply({ embeds: [embeds.error(t('error.title'), t('error.no_settings'))] }));
-    }
+    const settings = resolveExamSettings(exam, dao.getSettings(interaction.guildId) || {});
 
     const member = interaction.member;
     const eligibility = checkEligibility({ guild: interaction.guild, member, exam });
@@ -69,7 +67,8 @@ module.exports = {
       embeds.info(
         t('log.applied', { user: `<@${member.id}>` }),
         `${exam.name} • <#${channel.id}>`
-      )
+      ),
+      settings.log_channel_id
     );
   },
 };

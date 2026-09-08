@@ -9,10 +9,10 @@ const embeds = require('../../utils/embeds');
 module.exports = {
   id: 'review:grade',
   async execute(interaction, answerId) {
-    if (!isStaff(interaction)) return void (await interaction.reply(embeds.errorPayload('error.not_staff')));
     const answer = dao.getAnswerById(answerId);
     if (!answer) return void (await interaction.reply(embeds.errorPayload('error.exam_not_found')));
     const attempt = dao.getAttempt(answer.attempt_id);
+    if (!isStaff(interaction, attempt?.exam_id)) return void (await interaction.reply(embeds.errorPayload('error.not_staff')));
     if (!attempt || attempt.status !== 'reviewing') {
       return void (await interaction.reply(embeds.errorPayload('error.attempt_closed')));
     }

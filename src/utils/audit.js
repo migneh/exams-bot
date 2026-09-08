@@ -6,12 +6,13 @@ const { t } = require('./strings');
 /**
  * Send an embed to the configured audit-log channel (no-op when unset).
  */
-async function sendLog(guild, embed) {
+async function sendLog(guild, embed, channelOverride = null) {
   try {
     if (!guild) return;
     const settings = dao.getSettings(guild.id);
-    if (!settings || !settings.log_channel_id) return;
-    const channel = await guild.channels.fetch(settings.log_channel_id).catch(() => null);
+    const channelId = channelOverride || settings?.log_channel_id;
+    if (!channelId) return;
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
     if (!channel) return;
     await channel.send({ embeds: [embed] });
   } catch (err) {

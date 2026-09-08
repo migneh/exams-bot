@@ -36,11 +36,11 @@ module.exports = [
 ];
 
 async function guard(interaction, attemptId) {
-  if (!isStaff(interaction)) {
+  const attempt = dao.getAttempt(attemptId);
+  if (!isStaff(interaction, attempt?.exam_id)) {
     await interaction.reply(embeds.errorPayload('error.not_staff')).catch(() => {});
     return false;
   }
-  const attempt = dao.getAttempt(attemptId);
   if (!attempt || attempt.status !== 'reviewing') {
     await interaction.reply(embeds.errorPayload('error.attempt_closed')).catch(() => {});
     return false;

@@ -28,6 +28,10 @@ module.exports = function migrate(db) {
       cooldown_hours INTEGER DEFAULT 24,
       required_role_id TEXT,
       reward_role_id TEXT,
+      staff_role_id TEXT,
+      review_channel_id TEXT,
+      log_channel_id TEXT,
+      exams_category_id TEXT,
       shuffle_questions INTEGER DEFAULT 1,
       shuffle_answers INTEGER DEFAULT 1,
       questions_per_attempt INTEGER,
@@ -106,8 +110,13 @@ module.exports = function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_answers_attempt ON answers(attempt_id);
   `);
 
-  // Additive migrations for databases created before restart-proof deadlines
-  // and persisted cleanup jobs were introduced.
+  // Additive migrations for databases created before per-exam overrides,
+  // restart-proof deadlines, and persisted cleanup jobs were introduced.
+  const examColumns = db.prepare('PRAGMA table_info(exams)').all().map((row) => row.name);
+  for (const column of ['staff_role_id', 'review_channel_id', 'log_channel_id', 'exams_category_id']) {
+    if (!examColumns.includes(column)) db.exec(`ALTER TABLE exams ADD COLUMN ${column} TEXT`);
+  }
+
   const attemptColumns = db.prepare('PRAGMA table_info(attempts)').all().map((row) => row.name);
   if (!attemptColumns.includes('deadline_at')) db.exec('ALTER TABLE attempts ADD COLUMN deadline_at INTEGER');
   if (!attemptColumns.includes('cleanup_at')) db.exec('ALTER TABLE attempts ADD COLUMN cleanup_at INTEGER');

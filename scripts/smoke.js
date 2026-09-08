@@ -14,6 +14,8 @@ const { t } = require('../src/utils/strings');
 const { fmtDurationAr } = require('../src/utils/time');
 const builder = require('../src/systems/builder');
 const engine = require('../src/systems/examEngine');
+const { resolveExamSettings } = require('../src/utils/examSettings');
+const { FIXED_ARABIC_ALIASES } = require('../src/events/messageCreate');
 
 function step(name, fn) {
   fn();
@@ -36,6 +38,27 @@ step('exam create/update/duplicate', () => {
   assert.strictEqual(dao.getExam(exam.id).pass_percent, 70);
   assert.strictEqual(dao.getExam(exam.id).enabled, 0);
   dao.updateExam(exam.id, { enabled: true });
+  const examSettings = dao.updateExamSettings(exam.id, {
+    staff_role_id: 'exam-staff',
+    review_channel_id: 'exam-review',
+    log_channel_id: 'exam-log',
+    exams_category_id: 'exam-category',
+  });
+  assert.deepStrictEqual(examSettings, {
+    staff_role_id: 'exam-staff',
+    review_channel_id: 'exam-review',
+    log_channel_id: 'exam-log',
+    exams_category_id: 'exam-category',
+  });
+  assert.deepStrictEqual(resolveExamSettings(dao.getExam(exam.id), {
+    staff_role_id: 'global-staff',
+    review_channel_id: 'global-review',
+  }), {
+    staff_role_id: 'exam-staff',
+    review_channel_id: 'exam-review',
+    log_channel_id: 'exam-log',
+    exams_category_id: 'exam-category',
+  });
 
   // questions
   const q1 = dao.addQuestion(exam.id, { type: 'mcq_single', text: 'سؤال 1', points: 2 });
@@ -185,6 +208,24 @@ step('builder parsing (basics/advanced/roles/question)', () => {
 
   const badRole = builder.parseRoleInput(null, '123456789012345678');
   assert.strictEqual(badRole.ok, false);
+
+  const channels = [
+    { id: 'review', name: 'مراجعة', type: 0 },
+    { id: 'category', name: 'امتحانات', type: 4 },
+  ];
+  const guild = {
+    channels: {
+      cache: {
+        get: (id) => channels.find((channel) => channel.id === id),
+        find: (predicate) => channels.find(predicate),
+      },
+    },
+  };
+  assert.deepStrictEqual(builder.parseChannelInput(guild, 'مراجعة'), { ok: true, value: 'review' });
+  assert.deepStrictEqual(builder.parseChannelInput(guild, 'امتحانات', { category: true }), { ok: true, value: 'category' });
+  assert.deepStrictEqual(builder.parseChannelInput(guild, '-'), { ok: true, value: null });
+  assert.strictEqual(FIXED_ARABIC_ALIASES['مساعدة'], 'help');
+  assert.strictEqual(FIXED_ARABIC_ALIASES['إعدادات'], 'settings');
 });
 
 step('locale + progress bar + time formatting', () => {

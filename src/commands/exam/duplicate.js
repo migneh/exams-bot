@@ -3,6 +3,7 @@ const dao = require('../../database/dao');
 const embeds = require('../../utils/embeds');
 const { requireStaff } = require('../../utils/perms');
 const { sendLog } = require('../../utils/audit');
+const { resolveExamSettings } = require('../../utils/examSettings');
 
 module.exports = {
   builder: (sub) =>
@@ -31,7 +32,8 @@ module.exports = {
       embeds.info(
         t('log.exam_duplicated', { from: exam.name, to: copy.name }),
         `<@${interaction.user.id}>`
-      )
+      ),
+      resolveExamSettings(copy, dao.getSettings(interaction.guildId) || {}).log_channel_id
     );
   },
 };

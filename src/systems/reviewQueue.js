@@ -8,6 +8,7 @@ const { fmtDate } = require('../utils/time');
 const logger = require('../utils/logger');
 const state = require('../state');
 const config = require('../config');
+const { resolveExamSettings } = require('../utils/examSettings');
 
 function truncate(s, n) {
   s = String(s || '');
@@ -26,9 +27,9 @@ async function enqueue(attemptId) {
     ? channel.guild
     : (config.guildId ? state.client.guilds.cache.get(config.guildId) : state.client.guilds.cache.first());
   if (!guild) throw new Error('cannot resolve guild for review queue');
-  const settings = dao.getSettings(guild.id);
+  const settings = resolveExamSettings(exam, dao.getSettings(guild.id) || {});
 
-  if (!settings || !settings.review_channel_id) {
+  if (!settings.review_channel_id) {
     logger.warn('no review channel configured — finalizing without manual scores');
     await require('./examEngine').finalize(attempt.id, { noteKey: 'review.no_channel_note' });
     return;
@@ -106,7 +107,11 @@ async function enqueue(attemptId) {
   }
 
   const { sendLog } = require('../utils/audit');
-  await sendLog(guild, embeds.pending(t('log.review_queued'), `<@${attempt.user_id}> • ${exam ? exam.name : '—'}`));
+  await sendLog(
+    guild,
+    embeds.pending(t('log.review_queued'), `<@${attempt.user_id}> • ${exam ? exam.name : '—'}`),
+    settings.log_channel_id
+  );
 }
 
 /** A reviewer submitted a score for one written answer. */
@@ -136,7 +141,8 @@ async function onGraded(answerId, { score, feedback, reviewerId, interaction }) 
     try {
       const channel = await state.client.channels.fetch(attempt.channel_id).catch(() => null);
       const guild = channel ? channel.guild : null;
-      const settings = guild ? dao.getSettings(guild.id) : null;
+      const exam = dao.getExam(attempt.exam_id);
+      const settings = guild ? resolveExamSettings(exam, dao.getSettings(guild.id) || {}) : null;
       if (settings && settings.review_channel_id) {
         const rch = await guild.channels.fetch(settings.review_channel_id).catch(() => null);
         const rmsg = rch ? await rch.messages.fetch(attempt.review_msg_id).catch(() => null) : null;

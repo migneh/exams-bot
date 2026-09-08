@@ -22,6 +22,8 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    // Required for fixed Arabic message shortcuts in messageCreate.
+    GatewayIntentBits.MessageContent,
   ],
   partials: [Partials.Channel],
 });

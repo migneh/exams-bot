@@ -64,6 +64,10 @@ function createExam(fields) {
     cooldown_hours: fields.cooldown_hours ?? 24,
     required_role_id: fields.required_role_id || null,
     reward_role_id: fields.reward_role_id || null,
+    staff_role_id: fields.staff_role_id || null,
+    review_channel_id: fields.review_channel_id || null,
+    log_channel_id: fields.log_channel_id || null,
+    exams_category_id: fields.exams_category_id || null,
     shuffle_questions: fields.shuffle_questions === false ? 0 : 1,
     shuffle_answers: fields.shuffle_answers === false ? 0 : 1,
     questions_per_attempt: fields.questions_per_attempt || null,
@@ -73,16 +77,35 @@ function createExam(fields) {
   };
   db.prepare(
     `INSERT INTO exams (id, name, description, duration_min, pass_percent, max_attempts,
-      cooldown_hours, required_role_id, reward_role_id, shuffle_questions, shuffle_answers,
+      cooldown_hours, required_role_id, reward_role_id, staff_role_id, review_channel_id,
+      log_channel_id, exams_category_id, shuffle_questions, shuffle_answers,
       questions_per_attempt, enabled, created_by, created_at)
      VALUES (@id, @name, @description, @duration_min, @pass_percent, @max_attempts,
-      @cooldown_hours, @required_role_id, @reward_role_id, @shuffle_questions, @shuffle_answers,
+      @cooldown_hours, @required_role_id, @reward_role_id, @staff_role_id, @review_channel_id,
+      @log_channel_id, @exams_category_id, @shuffle_questions, @shuffle_answers,
       @questions_per_attempt, @enabled, @created_by, @created_at)`
   ).run(clean(exam));
   return getExam(exam.id);
 }
 
 const updateExam = (id, patch) => buildUpdate('exams', id, patch);
+
+function updateExamSettings(id, patch) {
+  const allowed = ['staff_role_id', 'review_channel_id', 'log_channel_id', 'exams_category_id'];
+  updateExam(id, Object.fromEntries(Object.entries(patch || {}).filter(([key]) => allowed.includes(key))));
+  return getExamSettings(id);
+}
+
+function getExamSettings(id) {
+  const exam = getExam(id);
+  if (!exam) return null;
+  return {
+    staff_role_id: exam.staff_role_id || null,
+    review_channel_id: exam.review_channel_id || null,
+    log_channel_id: exam.log_channel_id || null,
+    exams_category_id: exam.exams_category_id || null,
+  };
+}
 
 function deleteExam(id) {
   const tx = db.transaction(() => {
@@ -474,6 +497,8 @@ module.exports = {
   listOpenExams,
   createExam,
   updateExam,
+  updateExamSettings,
+  getExamSettings,
   deleteExam,
   deleteAttempt,
   duplicateExam,

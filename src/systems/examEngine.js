@@ -18,6 +18,7 @@ const embeds = require('../utils/embeds');
 const { t } = require('../utils/strings');
 const { progressBarLine } = require('../utils/progressBar');
 const { fmtDurationAr, fmtDate } = require('../utils/time');
+const { resolveExamSettings } = require('../utils/examSettings');
 const logger = require('../utils/logger');
 const state = require('../state');
 
@@ -364,9 +365,11 @@ async function startExam(interaction, attemptId) {
   await interaction.update({ content: '', ...buildQuestionMessage(fresh, 0) });
 
   const { sendLog } = require('../utils/audit');
+  const examSettings = resolveExamSettings(exam, dao.getSettings(interaction.guild.id) || {});
   await sendLog(
     interaction.guild,
-    embeds.info(t('log.attempt_started', { user: `<@${attempt.user_id}>` }), t('log.attempt_started_desc', { exam: exam.name, channel: `<#${attempt.channel_id}>` }))
+    embeds.info(t('log.attempt_started', { user: `<@${attempt.user_id}>` }), t('log.attempt_started_desc', { exam: exam.name, channel: `<#${attempt.channel_id}>` })),
+    examSettings.log_channel_id
   );
 }
 
@@ -472,12 +475,14 @@ async function handleSubmit(attemptId, { expired = false } = {}) {
       dao.updateAttempt(attempt.id, { status: 'review_failed' });
       logger.error('review queue enqueue failed:', err?.message || err);
       const guild = await resolveGuild(fresh.channel_id);
+      const examSettings = resolveExamSettings(exam, guild ? dao.getSettings(guild.id) || {} : {});
       await sendLog(
         guild,
         embeds.error(
           t('log.review_queue_failed', { user: `<@${fresh.user_id}>` }),
           `${exam ? exam.name : '—'} • ${err?.message || 'unknown error'}`
-        )
+        ),
+        examSettings.log_channel_id
       );
       return { reviewing: false, failed: true };
     }
@@ -488,7 +493,8 @@ async function handleSubmit(attemptId, { expired = false } = {}) {
       embeds.pending(
         t('log.submitted_review', { user: `<@${fresh.user_id}>` }),
         `${exam ? exam.name : '—'} • ${t('field.auto_score')}: ${graded.autoScore}/${graded.maxScore}`
-      )
+      ),
+      resolveExamSettings(exam, guild ? dao.getSettings(guild.id) || {} : {}).log_channel_id
     );
     return { reviewing: true };
   }
@@ -577,6 +583,7 @@ async function finalize(attemptId, { forcePassed = null, noteKey = null, decided
 
   const { sendLog } = require('../utils/audit');
   const guild = await resolveGuild(final.channel_id);
+  const examSettings = resolveExamSettings(exam, guild ? dao.getSettings(guild.id) || {} : {});
 
   if (!skipMessage) {
     try {
@@ -614,13 +621,14 @@ async function finalize(attemptId, { forcePassed = null, noteKey = null, decided
       { name: t('field.exam'), value: exam.name, inline: true },
       { name: t('field.score'), value: `${total}/${final.max_score} (${percent}%)`, inline: true },
       { name: t('field.result'), value: passed ? t('result.passed_short') : t('result.failed_short'), inline: true }
-    )
+    ),
+    examSettings.log_channel_id
   );
 
   // disable review control buttons if present
   if (final.review_msg_id) {
     try {
-      const reviewChannelId = (dao.getSettings(guild ? guild.id : '') || {}).review_channel_id;
+      const reviewChannelId = examSettings.review_channel_id;
       if (reviewChannelId) {
         const rch = await state.client.channels.fetch(reviewChannelId).catch(() => null);
         const rmsg = rch ? await rch.messages.fetch(final.review_msg_id).catch(() => null) : null;

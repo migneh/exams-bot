@@ -4,6 +4,7 @@ const timerManager = require('../../systems/timerManager');
 const channelManager = require('../../systems/channelManager');
 const embeds = require('../../utils/embeds');
 const { sendLog } = require('../../utils/audit');
+const { resolveExamSettings } = require('../../utils/examSettings');
 
 module.exports = {
   id: 'exam:cancelm',
@@ -33,7 +34,8 @@ module.exports = {
       embeds.warn(
         t('log.attempt_cancelled', { user: `<@${attempt.user_id}>` }),
         `${exam ? exam.name : '—'} • <#${attempt.channel_id}>`
-      )
+      ),
+      resolveExamSettings(exam, dao.getSettings(interaction.guildId) || {}).log_channel_id
     );
   },
 };

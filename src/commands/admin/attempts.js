@@ -4,6 +4,7 @@ const dao = require('../../database/dao');
 const embeds = require('../../utils/embeds');
 const { requireStaff } = require('../../utils/perms');
 const { sendLog } = require('../../utils/audit');
+const { resolveExamSettings } = require('../../utils/examSettings');
 const { fmtDate } = require('../../utils/time');
 const channelManager = require('../../systems/channelManager');
 const timerManager = require('../../systems/timerManager');
@@ -94,7 +95,8 @@ module.exports = {
         embeds.warn(
           t('log.attempts_reset', { user: `<@${user.id}>` }),
           `${exam.name} • <@${interaction.user.id}>`
-        )
+        ),
+        resolveExamSettings(exam, dao.getSettings(interaction.guildId) || {}).log_channel_id
       );
     }
   },

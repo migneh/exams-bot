@@ -3,6 +3,7 @@ const embeds = require('../../utils/embeds');
 const { t } = require('../../utils/strings');
 const { isStaff } = require('../../utils/perms');
 const { sendLog } = require('../../utils/audit');
+const { resolveExamSettings } = require('../../utils/examSettings');
 
 function truncate(s, n = 50) {
   s = String(s || '');
@@ -61,7 +62,8 @@ module.exports = {
       embeds.success(
         t('log.exam_saved', { name: exam.name }),
         `<@${interaction.user.id}> • ${count} ${t('field.questions')}`
-      )
+      ),
+      resolveExamSettings(exam, dao.getSettings(interaction.guildId) || {}).log_channel_id
     );
   },
 };

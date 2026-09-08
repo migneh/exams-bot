@@ -14,6 +14,8 @@ Apply → private exam channel → timed exam → auto/manual grading → pass/f
 ## ✨ Features
 
 - 🛠️ **Interactive exam builder** — build entire exams with buttons, selects and modals. No code editing, ever.
+- ⚙️ **Per-exam settings** — each exam can override the staff role, review channel, audit-log channel, and exam-channel category; `-` inherits the main `/settings` value.
+- 🗣️ **Fixed Arabic shortcuts** — `مساعدة`, `أوامر`, `بنغ`, `فحص`, `لوحة`, `الامتحانات`, and `إعدادات` work as built-in message shortcuts (not configurable).
 - 5 question types: اختيار من متعدد، اختيارات متعددة، صح أو خطأ، إجابة قصيرة، سؤال مقالي (+ optional image per question).
 - 🎫 **Private ticket-style exam channels** visible only to the member + staff.
 - ⏱️ **Restart-proof timers** — everything is persisted in SQLite and re-hydrated on boot; overdue attempts auto-expire, live attempts resume exactly where they stopped.
@@ -56,13 +58,13 @@ npm start        # or: npm run dev (auto-restart on changes)
 
 **Invite the bot** with the `bot` + `applications.commands` scopes and at least:
 `Manage Channels`, `Manage Roles`, `View Channels`, `Send Messages`, `Embed Links`, `Read Message History`, `Manage Messages`.
-The bot needs the **Server Members** intent enabled in the Developer Portal.
+The bot needs the **Server Members** and **Message Content** privileged intents enabled in the Developer Portal. Message Content is required only for the fixed Arabic message shortcuts.
 
 **First run checklist (in Discord):**
 
 1. `/settings staff_role:` رتبة الإدارة `review_channel:` قناة المراجعة `log_channel:` قناة السجل `exams_category:` تصنيف قنوات الامتحانات
-2. `/exam create` → fill the basics modal → add questions in the builder → ✅ تم
-3. `/panel send` in #التقديم — done!
+2. `/exam create` → fill the basics modal → add questions in the builder → optionally open `📚 القنوات` and `🎭 الرتب` → ✅ تم
+3. `/panel send` in #التقديم — done! Each exam inherits the main channels/role unless its builder override is set.
 
 ## 📋 Commands
 
@@ -71,6 +73,10 @@ The bot needs the **Server Members** intent enabled in the Developer Portal.
 |---|---|
 | `/leaderboard exam` | 🏆 top scorers per exam |
 | `/help` | 📘 full command guide |
+| `مساعدة` / `أوامر` | 📘 fixed Arabic help shortcut |
+| `بنغ` / `فحص` | 🏓 fixed Arabic ping shortcut |
+| `لوحة` / `الامتحانات` | 📋 fixed Arabic panel shortcut (staff) |
+| `إعدادات` | ⚙️ fixed Arabic settings shortcut (staff) |
 
 ### Staff (requires Manage Server or the configured staff role)
 | Command | Purpose |
@@ -89,6 +95,10 @@ The bot needs the **Server Members** intent enabled in the Developer Portal.
 | `/results export [exam]` | CSV export of results |
 | `/stats [exam]` | pass rates, averages, hardest questions |
 
+## 🧩 Per-exam overrides
+
+Open an exam from `/exam edit` and use the builder's `📚 القنوات` and `🎭 الرتب` buttons. Enter a channel/role mention, ID, or exact name. Enter `-` to clear the exam override and inherit the corresponding main setting. The exam-specific staff role is also accepted for review actions; Manage Server always remains an administrator fallback.
+
 ## 🎨 UX conventions
 
 - One message per exam state — the question embed is **edited in place**, never re-sent.
@@ -99,7 +109,7 @@ The bot needs the **Server Members** intent enabled in the Developer Portal.
 
 ## 🗄️ Database
 
-SQLite file at `data/exams.sqlite` (auto-created). Tables: `settings`, `exams`, `questions`, `choices`, `attempts`, `answers`, `blacklist`.
+SQLite file at `data/exams.sqlite` (auto-created). Tables: `settings`, `exams`, `questions`, `choices`, `attempts`, `answers`, `blacklist`. The `exams` table stores additive per-exam overrides for staff role, review channel, audit-log channel, and exam-channel category.
 
 Beyond the master plan's schema, the attempt row also stores `message_id`, `current_index`, `question_order`, `choice_orders`, `review_msg_id`, `expired`, `decided_by` and answers store `shown_at` / `graded_by` — this is what makes exams fully restart-proof (the shuffled order is frozen per attempt) and review actions auditable.
 
@@ -116,7 +126,7 @@ Beyond the master plan's schema, the attempt row also stores `message_id`, `curr
     ├── state.js              # shared client reference
     ├── database/             # driver (better-sqlite3 → node:sqlite fallback), dao, migrations
     ├── handlers/             # command / event / component routers
-    ├── events/               # ready (register + timer rehydration), interactionCreate
+    ├── events/               # ready (register + timer rehydration), interactionCreate, messageCreate shortcuts
     ├── commands/             # exam/, admin/, general/
     ├── components/           # buttons/, selectMenus/, modals/ — one file per custom ID
     └── systems/              # examEngine, timerManager, grader, reviewQueue,
