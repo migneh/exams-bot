@@ -23,8 +23,12 @@ function truncate(s, n) {
 /* ------------------------------ input parsing ---------------------------- */
 
 function parseNumber(input, { min, max, fallback = null } = {}) {
-  const n = parseInt(String(input).replace(/[^\d-]/g, ''), 10);
-  if (Number.isNaN(n)) return { ok: false, value: fallback };
+  const normalized = String(input ?? '')
+    .trim()
+    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
+  if (!/^-?\d+$/.test(normalized)) return { ok: false, value: fallback };
+  const n = Number(normalized);
+  if (!Number.isFinite(n)) return { ok: false, value: fallback };
   if (min !== undefined && n < min) return { ok: false, value: fallback };
   if (max !== undefined && n > max) return { ok: false, value: fallback };
   return { ok: true, value: n };
@@ -42,7 +46,7 @@ function parseBasics(fields) {
   const pass = parseNumber(fields.pass_percent, { min: 1, max: 100 });
   if (!pass.ok) return { ok: false, key: 'builder.bad_pass' };
 
-  const combo = String(fields.combo || '1, 24');
+  const combo = String(fields.combo || '1, 24').replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
   const nums = combo.split(/[^\d]+/).filter((x) => x !== '');
   const attempts = parseNumber(nums[0] ?? '1', { min: 0, max: 50, fallback: 1 });
   const cooldown = parseNumber(nums[1] ?? '24', { min: 0, max: 1000, fallback: 24 });
@@ -135,6 +139,17 @@ function home(examId) {
   const exam = dao.getExam(examId);
   if (!exam) return { embeds: [embeds.error(t('error.title'), t('error.exam_not_found'))], components: [] };
   const questions = dao.listQuestions(exam.id);
+  const questionLines = [];
+  for (const [i, q] of questions.entries()) {
+    const line = `${i + 1}. ${t(`type.${q.type}`)} — ${truncate(q.text, 45)} \`(${q.points} ${t('field.points_unit')})\``;
+    const suffix = questions.length > i + 1 ? `\n… +${questions.length - i - 1}` : '';
+    if ((questionLines.join('\n') + '\n' + line + suffix).length > 950) break;
+    questionLines.push(line);
+    if (questionLines.length >= config.limits.maxQuestionsListed) break;
+  }
+  const questionValue = questions.length
+    ? questionLines.join('\n') + (questionLines.length < questions.length ? `\n… +${questions.length - questionLines.length}` : '')
+    : t('builder.no_questions');
 
   const embed = embeds.brand(
     new (require('discord.js').EmbedBuilder)()
@@ -151,15 +166,7 @@ function home(examId) {
     },
     {
       name: `📋 ${t('builder.questions_field')} (${questions.length})`,
-      value: questions.length
-        ? questions
-            .slice(0, config.limits.maxQuestionsListed)
-            .map(
-              (q, i) =>
-                `${i + 1}. ${t(`type.${q.type}`)} — ${truncate(q.text, 60)} \`(${q.points} ${t('field.points_unit')})\``
-            )
-            .join('\n') + (questions.length > config.limits.maxQuestionsListed ? `\n… +${questions.length - config.limits.maxQuestionsListed}` : '')
-        : t('builder.no_questions'),
+      value: questionValue,
     }
   );
 

@@ -1,6 +1,8 @@
 const logger = require('../utils/logger');
 const commandHandler = require('../handlers/commandHandler');
 const timerManager = require('../systems/timerManager');
+const channelManager = require('../systems/channelManager');
+const reviewQueue = require('../systems/reviewQueue');
 
 module.exports = {
   name: 'ready',
@@ -23,6 +25,18 @@ module.exports = {
       await timerManager.hydrate();
     } catch (err) {
       logger.error('timer hydration failed:', err);
+    }
+
+    try {
+      await channelManager.hydrate();
+    } catch (err) {
+      logger.error('channel cleanup hydration failed:', err);
+    }
+
+    try {
+      await reviewQueue.hydrate();
+    } catch (err) {
+      logger.error('review queue hydration failed:', err);
     }
 
     logger.info('boot complete — bot is ready');

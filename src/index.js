@@ -10,9 +10,9 @@ const commandHandler = require('./handlers/commandHandler');
 const eventHandler = require('./handlers/eventHandler');
 const componentHandler = require('./handlers/componentHandler');
 
-if (!config.token || !config.clientId) {
+if (!config.token || !config.clientId || !config.guildId) {
   logger.error(
-    'missing credentials: copy .env.example to .env and set TOKEN + CLIENT_ID (and optionally GUILD_ID).'
+    'missing configuration: copy .env.example to .env and set TOKEN, CLIENT_ID, and GUILD_ID.'
   );
   process.exit(1);
 }
@@ -32,8 +32,16 @@ commandHandler.loadCommands();
 componentHandler.loadComponents();
 eventHandler.loadEvents(client);
 
-process.on('unhandledRejection', (err) => logger.error('unhandled rejection:', err));
-process.on('uncaughtException', (err) => logger.error('uncaught exception:', err));
+process.on('unhandledRejection', (err) => {
+  logger.error('unhandled rejection:', err);
+  process.exitCode = 1;
+});
+process.on('uncaughtException', (err) => {
+  logger.error('uncaught exception:', err);
+  // Continuing after an uncaught exception can leave timers and interaction
+  // state inconsistent. Let the process supervisor restart a clean instance.
+  process.exit(1);
+});
 
 const shutdown = async (signal) => {
   logger.info(`${signal} received — shutting down`);

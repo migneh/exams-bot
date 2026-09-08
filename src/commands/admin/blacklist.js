@@ -6,6 +6,7 @@ const { requireStaff } = require('../../utils/perms');
 const { sendLog } = require('../../utils/audit');
 const { fmtDate } = require('../../utils/time');
 const channelManager = require('../../systems/channelManager');
+const timerManager = require('../../systems/timerManager');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -35,13 +36,13 @@ module.exports = {
     if (sub === 'add') {
       const reason = interaction.options.getString('reason');
       dao.addBlacklist(user.id, reason, interaction.user.id);
-      // cancel any live attempts
-      for (const attempt of dao.listInProgress()) {
-        if (attempt.user_id === user.id) {
-          dao.updateAttempt(attempt.id, { status: 'cancelled' });
-          const ch = await interaction.guild.channels.fetch(attempt.channel_id).catch(() => null);
-          if (ch) channelManager.scheduleDelete(ch, 5000);
-        }
+      // Cancel pending and in-progress attempts. Leaving a pending welcome
+      // alive would let a newly blacklisted member bypass this check at start.
+      for (const attempt of dao.activeAttemptsByUser(user.id)) {
+        dao.updateAttempt(attempt.id, { status: 'cancelled', cleanup_at: Date.now() + 5000 });
+        timerManager.disarm(attempt.id);
+        const ch = await interaction.guild.channels.fetch(attempt.channel_id).catch(() => null);
+        if (ch) channelManager.scheduleDelete(ch, 5000);
       }
       await interaction.reply({
         embeds: [embeds.success(t('blacklist.added_title'), `<@${user.id}>${reason ? `\n💬 ${reason}` : ''}`)],

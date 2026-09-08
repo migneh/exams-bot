@@ -1,5 +1,7 @@
 const dayjs = require('dayjs');
+const relativeTime = require('dayjs/plugin/relativeTime');
 require('dayjs/locale/ar');
+dayjs.extend(relativeTime);
 dayjs.locale('ar');
 
 /** "5 د 30 ث" style short Arabic duration. */

@@ -4,11 +4,13 @@ const dao = require('../../database/dao');
 const embeds = require('../../utils/embeds');
 const { t } = require('../../utils/strings');
 const { sendLog } = require('../../utils/audit');
+const { isStaff } = require('../../utils/perms');
 
 /** /exam create → exam basics → creates the exam and opens the builder. */
 module.exports = {
   id: 'exam:basicsm',
   async execute(interaction) {
+    if (!isStaff(interaction)) return void (await interaction.reply(embeds.errorPayload('error.not_staff')));
     const parsed = builder.parseBasics({
       name: interaction.fields.getTextInputValue('name'),
       description: interaction.fields.getTextInputValue('description'),

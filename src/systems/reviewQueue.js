@@ -22,19 +22,21 @@ async function enqueue(attemptId) {
   const written = dao.writtenAnswers(attempt.id);
 
   const channel = await state.client.channels.fetch(attempt.channel_id).catch(() => null);
-  const guild = channel ? channel.guild : state.client.guilds.cache.first();
-  if (!guild) return;
+  const guild = channel
+    ? channel.guild
+    : (config.guildId ? state.client.guilds.cache.get(config.guildId) : state.client.guilds.cache.first());
+  if (!guild) throw new Error('cannot resolve guild for review queue');
   const settings = dao.getSettings(guild.id);
 
   if (!settings || !settings.review_channel_id) {
     logger.warn('no review channel configured — finalizing without manual scores');
-    require('./examEngine').finalize(attempt.id, { noteKey: 'review.no_channel_note' }).catch(() => {});
+    await require('./examEngine').finalize(attempt.id, { noteKey: 'review.no_channel_note' });
     return;
   }
 
   const reviewChannel = await guild.channels.fetch(settings.review_channel_id).catch(() => null);
   if (!reviewChannel) {
-    require('./examEngine').finalize(attempt.id, { noteKey: 'review.no_channel_note' }).catch(() => {});
+    await require('./examEngine').finalize(attempt.id, { noteKey: 'review.no_channel_note' });
     return;
   }
 
@@ -57,10 +59,26 @@ async function enqueue(attemptId) {
     ),
   ];
 
-  const controlMsg = await reviewChannel.send({ embeds: [control], components: rows });
-  dao.updateAttempt(attempt.id, { review_msg_id: controlMsg.id });
+  let sentAnswerIds = {};
+  try {
+    sentAnswerIds = attempt.review_answer_msg_ids ? JSON.parse(attempt.review_answer_msg_ids) : {};
+  } catch {
+    sentAnswerIds = {};
+  }
+
+  // The control message and each answer message are persisted independently,
+  // making a retry after a Discord outage idempotent instead of duplicating the
+  // entire review queue.
+  if (!attempt.review_msg_id) {
+    const controlMsg = await reviewChannel.send({ embeds: [control], components: rows });
+    dao.updateAttempt(attempt.id, {
+      review_msg_id: controlMsg.id,
+      review_answer_msg_ids: JSON.stringify(sentAnswerIds),
+    });
+  }
 
   for (const a of written) {
+    if (sentAnswerIds[a.id]) continue;
     const fast = a.shown_at && a.answered_at && a.answered_at - a.shown_at < config.timing.fastAnswer;
     const ansEmbed = embeds.pending(
       `${t(`type.${a.question_type}`)} • ${t('review.answer_of', { user: `<@${attempt.user_id}>` })}`
@@ -82,7 +100,9 @@ async function enqueue(attemptId) {
         .setLabel(t('review.grade'))
         .setStyle(ButtonStyle.Primary)
     );
-    await reviewChannel.send({ embeds: [ansEmbed], components: [row] });
+    const answerMsg = await reviewChannel.send({ embeds: [ansEmbed], components: [row] });
+    sentAnswerIds[a.id] = answerMsg.id;
+    dao.updateAttempt(attempt.id, { review_answer_msg_ids: JSON.stringify(sentAnswerIds) });
   }
 
   const { sendLog } = require('../utils/audit');
@@ -146,7 +166,11 @@ async function accept(attemptId, reviewerId) {
 async function retake(attemptId, reviewerId) {
   const attempt = dao.getAttempt(attemptId);
   if (!attempt || attempt.status !== 'reviewing') return null;
-  dao.updateAttempt(attempt.id, { status: 'retake', decided_by: reviewerId });
+  dao.updateAttempt(attempt.id, {
+    status: 'retake',
+    decided_by: reviewerId,
+    cleanup_at: Date.now() + config.timing.channelDeleteDelay,
+  });
 
   const exam = dao.getExam(attempt.exam_id);
   try {
@@ -168,6 +192,19 @@ async function retake(attemptId, reviewerId) {
   return dao.getAttempt(attemptId);
 }
 
+/** Retry review jobs that were interrupted by a process or Discord failure. */
+async function hydrate() {
+  for (const attempt of dao.listReviewQueuePending()) {
+    try {
+      if (attempt.status === 'review_failed') dao.updateAttempt(attempt.id, { status: 'reviewing' });
+      await enqueue(attempt.id);
+    } catch (err) {
+      dao.updateAttempt(attempt.id, { status: 'review_failed' });
+      logger.error('review queue hydration failed:', err?.message || err);
+    }
+  }
+}
+
 /** Staff decision: final rejection. */
 async function reject(attemptId, reviewerId) {
   return require('./examEngine').finalize(attemptId, {
@@ -177,4 +214,4 @@ async function reject(attemptId, reviewerId) {
   });
 }
 
-module.exports = { enqueue, onGraded, accept, retake, reject };
+module.exports = { enqueue, hydrate, onGraded, accept, retake, reject };

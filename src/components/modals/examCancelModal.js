@@ -20,7 +20,7 @@ module.exports = {
       return void (await interaction.reply(embeds.errorPayload('error.attempt_closed')));
     }
 
-    dao.updateAttempt(attempt.id, { status: 'cancelled' });
+    dao.updateAttempt(attempt.id, { status: 'cancelled', cleanup_at: Date.now() + 15000 });
     timerManager.disarm(attempt.id);
 
     const embed = embeds.warn(t('exam.cancelled_title'), t('exam.cancelled_desc'));

@@ -13,6 +13,7 @@ const { progressBar, progressBarLine } = require('../src/utils/progressBar');
 const { t } = require('../src/utils/strings');
 const { fmtDurationAr } = require('../src/utils/time');
 const builder = require('../src/systems/builder');
+const engine = require('../src/systems/examEngine');
 
 function step(name, fn) {
   fn();
@@ -98,6 +99,9 @@ step('attempt + answers + auto grading', () => {
   assert.strictEqual(graded.hasWritten, true);
   assert.strictEqual(graded.autoScore, 2, 'only q1 correct');
   assert.strictEqual(graded.maxScore, 15, '2+1+3+4+5');
+  // The database enforces one live attempt per user/exam; finish this
+  // partially reviewed attempt before creating the second fixture below.
+  dao.updateAttempt(attempt.id, { status: 'graded', passed: 0, submitted_at: Date.now(), manual_score: 0 });
 
   // exact multi answer → full points
   const attempt2 = dao.createAttempt({ exam_id: exam.id, user_id: 'u9', channel_id: 'ch2', attempt_number: 2 });
@@ -134,7 +138,7 @@ step('stats + hardest questions', () => {
 
 step('eligibility helpers (blacklist/attempts counters)', () => {
   const exam = dao.listExams().find((e) => e.name === 'امتحان الدعم');
-  assert.strictEqual(dao.finishedAttemptsCount('u9', exam.id), 0);
+  assert.strictEqual(dao.finishedAttemptsCount('u9', exam.id), 1);
   dao.updateAttempt(dao.getAttemptByChannel('ch1') ? dao.getAttemptByChannel('ch1').id : '', {});
   // mark both attempts graded
   for (const a of dao.attemptsByUser('u9')) {
@@ -191,6 +195,8 @@ step('locale + progress bar + time formatting', () => {
   assert.ok(progressBarLine(3, 5).includes('3/5'));
   assert.strictEqual(fmtDurationAr(330000), '5 د 30 ث');
   assert.strictEqual(fmtDurationAr(0), '0 ث');
+  assert.strictEqual(engine.deadlineFor({ deadline_at: 123 }, { duration_min: 99 }), 123);
+  assert.strictEqual(engine.isExpired({ deadline_at: 123 }, { duration_min: 99 }, 124), true);
 });
 
 console.log('\n✅ smoke test passed — core systems OK');

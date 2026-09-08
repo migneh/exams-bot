@@ -4,11 +4,24 @@ const componentHandler = require('../handlers/componentHandler');
 const embeds = require('../utils/embeds');
 const { t } = require('../utils/strings');
 const { MessageFlags } = require('discord.js');
+const config = require('../config');
 
 module.exports = {
   name: 'interactionCreate',
   async execute(interaction) {
     try {
+      // Keep the configured single-server boundary enforced for every
+      // interaction, not only during slash-command registration.
+      if (config.guildId && interaction.guildId !== config.guildId) {
+        if (interaction.isAutocomplete()) return void (await interaction.respond([]).catch(() => {}));
+        if (interaction.isRepliable()) {
+          return void (await interaction.reply({
+            embeds: [embeds.error(t('error.title'), t('error.wrong_guild'))],
+            flags: MessageFlags.Ephemeral,
+          }).catch(() => {}));
+        }
+        return;
+      }
       if (interaction.isChatInputCommand() || interaction.isAutocomplete()) {
         await commandHandler.execute(interaction);
       } else if (

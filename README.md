@@ -29,7 +29,7 @@ Apply → private exam channel → timed exam → auto/manual grading → pass/f
 
 | Layer | Choice |
 |---|---|
-| Runtime | Node.js 18+ (22.5+ recommended) |
+| Runtime | Node.js 22.5+ |
 | Library | `discord.js@^14.16` |
 | Database | SQLite — `better-sqlite3` (preferred) with automatic fallback to Node's built-in `node:sqlite` (Node ≥ 22.5) when the native module can't build |
 | Config | `dotenv` |
@@ -48,7 +48,7 @@ npm install
 cp .env.example .env
 #    TOKEN      → Discord Developer Portal → Bot → Reset Token
 #    CLIENT_ID  → Developer Portal → General Information → Application ID
-#    GUILD_ID   → (recommended) your server ID → instant slash-command registration
+#    GUILD_ID   → your server ID (required; enables the single-server safety boundary)
 
 # 3. run
 npm start        # or: npm run dev (auto-restart on changes)
