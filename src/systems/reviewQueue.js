@@ -9,6 +9,7 @@ const logger = require('../utils/logger');
 const state = require('../state');
 const config = require('../config');
 const { resolveExamSettings } = require('../utils/examSettings');
+const { deleteReviewMessages } = require('../utils/reviewCleanup');
 
 function truncate(s, n) {
   s = String(s || '');
@@ -195,6 +196,7 @@ async function retake(attemptId, reviewerId) {
   } catch {
     /* ignore */
   }
+  await deleteReviewMessages(attempt);
   return dao.getAttempt(attemptId);
 }
 

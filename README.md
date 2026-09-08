@@ -20,7 +20,7 @@ Apply → private exam channel → timed exam → auto/manual grading → pass/f
 - 🎫 **Private ticket-style exam channels** visible only to the member + staff.
 - ⏱️ **Restart-proof timers** — everything is persisted in SQLite and re-hydrated on boot; overdue attempts auto-expire, live attempts resume exactly where they stopped.
 - 📊 Real-time progress bar `▰▰▰▱▱ 3/5`, live countdown, warning pings at 5 & 1 minutes, DM reminder.
-- 🤖 **Auto grading** for objective questions + **staff review queue** for written answers (score modal + feedback, force accept / request retake / final reject).
+- 🤖 **Auto grading** for objective questions + **staff review queue** for written answers (score modal + feedback, force accept / request retake / final reject). Completed review control and answer embeds are automatically cleaned up from the pending-review channel.
 - 🏅 Pass → reward role + celebration embed + DM copy of the result.
 - 🛡️ Anti-cheat: max attempts, cooldowns, blacklist, required role, question & answer shuffling, random question subsets, suspicious-speed flagging (< 5 s answers), owner verification on every click.
 - 📈 `/stats` (pass rates, averages, hardest questions), `/leaderboard`, `/results export` (CSV with Arabic headers, Excel-friendly BOM).

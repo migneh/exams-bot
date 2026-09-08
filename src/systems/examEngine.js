@@ -19,6 +19,7 @@ const { t } = require('../utils/strings');
 const { progressBarLine } = require('../utils/progressBar');
 const { fmtDurationAr, fmtDate } = require('../utils/time');
 const { resolveExamSettings } = require('../utils/examSettings');
+const { deleteReviewMessages } = require('../utils/reviewCleanup');
 const logger = require('../utils/logger');
 const state = require('../state');
 
@@ -643,6 +644,7 @@ async function finalize(attemptId, { forcePassed = null, noteKey = null, decided
     }
   }
 
+  await deleteReviewMessages(final);
   return final;
 }
 
